@@ -19,6 +19,20 @@ current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
+def normalize_participant(participant):
+    if isinstance(participant, dict):
+        email = participant.get("email") or participant.get("name") or ""
+        name = participant.get("name") or email
+        return {"email": email, "name": name}
+
+    email = str(participant)
+    return {"email": email, "name": email}
+
+
+def normalize_activity(activity):
+    activity["participants"] = [normalize_participant(participant) for participant in activity.get("participants", [])]
+
+
 # In-memory activity database
 activities = {
     "Chess Club": {
@@ -81,6 +95,9 @@ activities.update({
     }
 })
 
+for activity in activities.values():
+    normalize_activity(activity)
+
 
 @app.get("/")
 def root():
@@ -93,7 +110,7 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, name: str | None = None):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -103,11 +120,31 @@ def signup_for_activity(activity_name: str, email: str):
     activity = activities[activity_name]
 
     # Validate student is not already signed up
-    if email in activity["participants"]:
+    if any(normalize_participant(participant)["email"] == email for participant in activity["participants"]):
         raise HTTPException(status_code=400, detail="Student already signed up for this activity")
 
-        
+    display_name = name or email
 
     # Add student
-    activity["participants"].append(email)
-    return {"message": f"Signed up {email} for {activity_name}"}
+    activity["participants"].append({"email": email, "name": display_name})
+    return {"message": f"Signed up {display_name} for {activity_name}"}
+
+
+@app.delete("/activities/{activity_name}/participants/{email}")
+def unregister_participant(activity_name: str, email: str):
+    """Remove a student from an activity"""
+    if activity_name not in activities:
+        raise HTTPException(status_code=404, detail="Activity not found")
+
+    activity = activities[activity_name]
+
+    participant_index = next(
+        (index for index, participant in enumerate(activity["participants"]) if normalize_participant(participant)["email"] == email),
+        None,
+    )
+
+    if participant_index is None:
+        raise HTTPException(status_code=404, detail="Participant not found")
+
+    activity["participants"].pop(participant_index)
+    return {"message": f"Removed {email} from {activity_name}"}
